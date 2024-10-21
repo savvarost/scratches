@@ -1,0 +1,149 @@
+{
+  "name": "scratches",
+  "displayName": "scratches",
+  "description": "todo",
+  "version": "0.0.1",
+  "publisher": "scratches", 
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:scratches.createProjectScratchFile",
+    "onCommand:scratches.createTotalScratchFile",
+    "onCommand:extension.showDirectory",
+    "onCommand:directoryViewer.refreshEntry"
+  ],
+  "main": "./dist/extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/savvarost/scratches.git"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "scratches.createProjectScratchFile",
+        "title": "Create Project Scratch File"
+      },
+      {
+        "command": "scratches.createTotalScratchFile",
+        "title": "Create Total Scratch File"
+      },
+      {
+        "command": "extension.showDirectory",
+        "title": "Show Directory"
+      },
+      {
+        "command": "directoryViewer.refreshEntry",
+        "title": "Refresh Directory Viewer"
+      },
+      {
+        "command": "extension.createFile",
+        "title": "Create File"
+      },
+      {
+        "command": "extension.deleteFile",
+        "title": "Delete File"
+      },
+      {
+        "command": "extension.renameFile",
+        "title": "Rename File"
+      },
+      {
+        "command": "extension.moveFile",
+        "title": "Move File"
+      },
+      {
+        "command": "extension.copyFile",
+        "title": "Copy File"
+      },
+      {
+        "command": "extension.cutFile",
+        "title": "Cut File"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "scratches Configuration",
+      "properties": {
+        "scratches.directory": {
+          "type": "string",
+          "default": "~/Documents/scratches",
+          "description": "Directory where scratch files are stored."
+        }
+      }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "directoryViewer",
+          "name": "scratches"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "extension.createFile",
+          "when": "view == directoryViewer && viewItem == folder",
+          "group": "navigation"
+        },
+        {
+          "command": "extension.deleteFile",
+          "when": "view == directoryViewer && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "extension.renameFile",
+          "when": "view == directoryViewer && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "extension.moveFile",
+          "when": "view == directoryViewer && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "extension.copyFile",
+          "when": "view == directoryViewer && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "extension.cutFile",
+          "when": "view == directoryViewer && viewItem == file",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "vscode-test"
+  },
+  "dependencies": {
+    "language-map": "^1.5.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.7",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.91.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.0",
+    "eslint": "^9.8.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.5.4",
+    "webpack": "^5.93.0",
+    "webpack-cli": "^5.1.4"
+  }
+}
