@@ -1,8 +1,8 @@
 {
   "name": "scratches",
   "displayName": "scratches",
-  "description": "todo",
-  "version": "0.0.1",
+  "description": "Scratches is a Visual Studio Code extension designed to help you manage temporary or experimental files during your coding sessions. It provides a centralized storage solution for scratch files, enabling you to efficiently organize and access these files. With features like project-specific file management, shared files access, and comprehensive file operations, Scratches enhances your workflow by keeping your scratch files organized and easily accessible.",
+  "version": "1.0.0",
   "publisher": "scratches", 
   "engines": {
     "vscode": "^1.91.0"
@@ -10,140 +10,485 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onCommand:scratches.createProjectScratchFile",
-    "onCommand:scratches.createTotalScratchFile",
-    "onCommand:extension.showDirectory",
-    "onCommand:directoryViewer.refreshEntry"
-  ],
-  "main": "./dist/extension.js",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/savvarost/scratches.git"
-  },
+  "activationEvents": [],
+  "main": "./out/extension.js",
   "contributes": {
-    "commands": [
-      {
-        "command": "scratches.createProjectScratchFile",
-        "title": "Create Project Scratch File"
-      },
-      {
-        "command": "scratches.createTotalScratchFile",
-        "title": "Create Total Scratch File"
-      },
-      {
-        "command": "extension.showDirectory",
-        "title": "Show Directory"
-      },
-      {
-        "command": "directoryViewer.refreshEntry",
-        "title": "Refresh Directory Viewer"
-      },
-      {
-        "command": "extension.createFile",
-        "title": "Create File"
-      },
-      {
-        "command": "extension.deleteFile",
-        "title": "Delete File"
-      },
-      {
-        "command": "extension.renameFile",
-        "title": "Rename File"
-      },
-      {
-        "command": "extension.moveFile",
-        "title": "Move File"
-      },
-      {
-        "command": "extension.copyFile",
-        "title": "Copy File"
-      },
-      {
-        "command": "extension.cutFile",
-        "title": "Cut File"
-      }
-    ],
     "configuration": {
       "type": "object",
-      "title": "scratches Configuration",
+      "title": "Scratches",
       "properties": {
-        "scratches.directory": {
-          "type": "string",
-          "default": "~/Documents/scratches",
-          "description": "Directory where scratch files are stored."
+        "scratches.path": {
+          "markdownDescription": "Directory where scratch files are stored. [Set Root Path](command:scratches.setRootPath)"
         }
       }
     },
+    "viewsWelcome": [
+      {
+        "view": "viewsWelcome",
+        "contents": "Welcome to Scratches\n\n\nTo get started with the Scratches extension, you need to select a directory where all your scratch files will be stored. This directory acts as a central repository for all temporary or experimental files that you create during your coding sessions.\n\n[Set Root Path](command:scratches.setRootPath)",
+        "when": "!config.scratches.path"
+      }
+    ],
+    "commands": [
+      {
+        "command": "extension.openMyView",
+        "title": "Open My View"
+      },
+      {
+        "command": "sectionProjectFiles.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sectionProjectFiles.newScratchFile",
+        "title": "New Scratch File...",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "sectionProjectFiles.newFolder",
+        "title": "New Folder...",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "sectionProjectFiles.rename",
+        "title": "Rename..."
+      },
+      {
+        "command": "sectionProjectFiles.copyPath",
+        "title": "Copy Path"
+      },
+      {
+        "command": "sectionProjectFiles.copy",
+        "title": "Copy"
+      },
+      {
+        "command": "sectionProjectFiles.cut",
+        "title": "Cut"
+      },
+      {
+        "command": "sectionProjectFiles.paste",
+        "title": "Paste"
+      },
+      {
+        "command": "sectionProjectFiles.clear",
+        "shortTitle": "Clear",
+        "title": "Move all files from the root with a date in the name earlier than the specified date to the \"trash\" folder",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "sectionProjectFiles.delete",
+        "title": "Delete",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "sectionSharedFiles.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sectionSharedFiles.newScratchFile",
+        "title": "New Scratch File...",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "sectionSharedFiles.newFolder",
+        "title": "New Folder...",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "sectionSharedFiles.rename",
+        "title": "Rename..."
+      },
+      {
+        "command": "sectionSharedFiles.copyPath",
+        "title": "Copy Path"
+      },
+      {
+        "command": "sectionSharedFiles.copy",
+        "title": "Copy"
+      },
+      {
+        "command": "sectionSharedFiles.cut",
+        "title": "Cut"
+      },
+      {
+        "command": "sectionSharedFiles.paste",
+        "title": "Paste"
+      },
+      {
+        "command": "sectionSharedFiles.clear",
+        "shortTitle": "Clear",
+        "title": "Move all files from the root with a date in the name earlier than the specified date to the \"trash\" folder",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "sectionSharedFiles.delete",
+        "title": "Delete",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "sectionAllFiles.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sectionAllFiles.newScratchFile",
+        "title": "New Scratch File...",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "sectionAllFiles.newFolder",
+        "title": "New Folder...",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "sectionAllFiles.rename",
+        "title": "Rename..."
+      },
+      {
+        "command": "sectionAllFiles.copyPath",
+        "title": "Copy Path"
+      },
+      {
+        "command": "sectionAllFiles.copy",
+        "title": "Copy"
+      },
+      {
+        "command": "sectionAllFiles.cut",
+        "title": "Cut"
+      },
+      {
+        "command": "sectionAllFiles.paste",
+        "title": "Paste"
+      },
+      {
+        "command": "sectionAllFiles.clear",
+        "shortTitle": "Clear",
+        "title": "Move all files from the root with a date in the name earlier than the specified date to the \"trash\" folder",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "sectionAllFiles.delete",
+        "title": "Delete",
+        "icon": "$(trash)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "sectionProjectFiles.copy",
+        "key": "ctrl+c",
+        "when": "sectionProjectFiles",
+        "mac": "cmd+c"
+      },
+      {
+        "command": "sectionProjectFiles.cut",
+        "key": "ctrl+x",
+        "when": "sectionProjectFiles",
+        "mac": "cmd+x"
+      },
+      {
+        "command": "sectionProjectFiles.paste",
+        "key": "ctrl+v",
+        "when": "sectionProjectFiles",
+        "mac": "cmd+v"
+      },
+      {
+        "command": "sectionProjectFiles.delete",
+        "key": "ctrl+[Delete]",
+        "when": "sectionProjectFiles",
+        "mac": "cmd+[Backspace]"
+      },
+      {
+        "command": "sectionSharedFiles.copy",
+        "key": "ctrl+c",
+        "when": "sectionSharedFiles",
+        "mac": "cmd+c"
+      },
+      {
+        "command": "sectionSharedFiles.cut",
+        "key": "ctrl+x",
+        "when": "sectionSharedFiles",
+        "mac": "cmd+x"
+      },
+      {
+        "command": "sectionSharedFiles.paste",
+        "key": "ctrl+v",
+        "when": "sectionSharedFiles",
+        "mac": "cmd+v"
+      },
+      {
+        "command": "sectionSharedFiles.delete",
+        "key": "ctrl+[Delete]",
+        "when": "sectionSharedFiles",
+        "mac": "cmd+[Backspace]"
+      },
+      {
+        "command": "sectionAllFiles.copy",
+        "key": "ctrl+c",
+        "when": "sectionAllFiles",
+        "mac": "cmd+c"
+      },
+      {
+        "command": "sectionAllFiles.cut",
+        "key": "ctrl+x",
+        "when": "sectionAllFiles",
+        "mac": "cmd+x"
+      },
+      {
+        "command": "sectionAllFiles.paste",
+        "key": "ctrl+v",
+        "when": "sectionAllFiles",
+        "mac": "cmd+v"
+      },
+      {
+        "command": "sectionAllFiles.delete",
+        "key": "ctrl+[Delete]",
+        "when": "sectionAllFiles",
+        "mac": "cmd+[Backspace]"
+      }
+    ],
     "views": {
-      "explorer": [
+      "scratchesTab": [
         {
-          "id": "directoryViewer",
-          "name": "scratches"
+          "id": "viewsWelcome",
+          "name": "Welcome Scratches",
+          "when": "!config.scratches.path"
+        },
+        {
+          "id": "sectionProjectFiles",
+          "name": "Project Files",
+          "when": "config.scratches.path && workspaceFolderCount > 0"
+        },
+        {
+          "id": "sectionSharedFiles",
+          "name": "Shared Files",
+          "when": "config.scratches.path"
+        },
+        {
+          "id": "sectionAllFiles",
+          "name": "All Files",
+          "when": "config.scratches.path"
         }
       ]
     },
     "menus": {
+      "commandPalette": [
+        {
+          "command": "sectionProjectFiles.newScratchFile"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "sectionProjectFiles.newScratchFile",
+          "when": "view == sectionProjectFiles",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sectionProjectFiles.newFolder",
+          "when": "view == sectionProjectFiles",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sectionProjectFiles.clear",
+          "when": "view == sectionProjectFiles",
+          "group": "navigation@3"
+        },
+        {
+          "command": "sectionProjectFiles.refresh",
+          "when": "view == sectionProjectFiles",
+          "group": "navigation@9"
+        },
+        {
+          "command": "sectionSharedFiles.newScratchFile",
+          "when": "view == sectionSharedFiles",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sectionSharedFiles.newFolder",
+          "when": "view == sectionSharedFiles",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sectionSharedFiles.clear",
+          "when": "view == sectionSharedFiles",
+          "group": "navigation@3"
+        },
+        {
+          "command": "sectionSharedFiles.refresh",
+          "when": "view == sectionSharedFiles",
+          "group": "navigation@9"
+        },
+        {
+          "command": "sectionAllFiles.newScratchFile",
+          "when": "view == sectionAllFiles",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sectionAllFiles.newFolder",
+          "when": "view == sectionAllFiles",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sectionAllFiles.clear",
+          "when": "view == sectionAllFiles",
+          "group": "navigation@3"
+        },
+        {
+          "command": "sectionAllFiles.refresh",
+          "when": "view == sectionAllFiles",
+          "group": "navigation@9"
+        }
+      ],
       "view/item/context": [
         {
-          "command": "extension.createFile",
-          "when": "view == directoryViewer && viewItem == folder",
-          "group": "navigation"
+          "command": "sectionProjectFiles.newScratchFile",
+          "when": "view == sectionProjectFiles",
+          "group": "group_0@1"
         },
         {
-          "command": "extension.deleteFile",
-          "when": "view == directoryViewer && viewItem == file",
-          "group": "navigation"
+          "command": "sectionProjectFiles.newFolder",
+          "when": "view == sectionProjectFiles",
+          "group": "group_0@2"
         },
         {
-          "command": "extension.renameFile",
-          "when": "view == directoryViewer && viewItem == file",
-          "group": "navigation"
+          "command": "sectionProjectFiles.copy",
+          "when": "view == sectionProjectFiles && viewItem == file",
+          "group": "group_2@1"
         },
         {
-          "command": "extension.moveFile",
-          "when": "view == directoryViewer && viewItem == file",
-          "group": "navigation"
+          "command": "sectionProjectFiles.cut",
+          "when": "view == sectionProjectFiles && viewItem == file",
+          "group": "group_2@2"
         },
         {
-          "command": "extension.copyFile",
-          "when": "view == directoryViewer && viewItem == file",
-          "group": "navigation"
+          "command": "sectionProjectFiles.paste",
+          "when": "view == sectionProjectFiles",
+          "group": "group_2@3"
         },
         {
-          "command": "extension.cutFile",
-          "when": "view == directoryViewer && viewItem == file",
-          "group": "navigation"
+          "command": "sectionProjectFiles.copyPath",
+          "when": "view == sectionProjectFiles",
+          "group": "group_3@1"
+        },
+        {
+          "command": "sectionProjectFiles.rename",
+          "when": "view == sectionProjectFiles",
+          "group": "group_4@0"
+        },
+        {
+          "command": "sectionProjectFiles.delete",
+          "when": "view == sectionProjectFiles",
+          "group": "group_4@1"
+        },
+        {
+          "command": "sectionSharedFiles.newScratchFile",
+          "when": "view == sectionSharedFiles",
+          "group": "group_0@1"
+        },
+        {
+          "command": "sectionSharedFiles.newFolder",
+          "when": "view == sectionSharedFiles",
+          "group": "group_0@1"
+        },
+        {
+          "command": "sectionSharedFiles.copy",
+          "when": "view == sectionSharedFiles && viewItem == file",
+          "group": "group_2@1"
+        },
+        {
+          "command": "sectionSharedFiles.cut",
+          "when": "view == sectionSharedFiles && viewItem == file",
+          "group": "group_2@2"
+        },
+        {
+          "command": "sectionSharedFiles.paste",
+          "when": "view == sectionSharedFiles",
+          "group": "group_2@3"
+        },
+        {
+          "command": "sectionSharedFiles.copyPath",
+          "when": "view == sectionSharedFiles",
+          "group": "group_3@1"
+        },
+        {
+          "command": "sectionSharedFiles.rename",
+          "when": "view == sectionSharedFiles",
+          "group": "group_4@0"
+        },
+        {
+          "command": "sectionSharedFiles.delete",
+          "when": "view == sectionSharedFiles",
+          "group": "group_4@1"
+        },
+        {
+          "command": "sectionAllFiles.newScratchFile",
+          "when": "view == sectionAllFiles",
+          "group": "group_0@1"
+        },
+        {
+          "command": "sectionAllFiles.newFolder",
+          "when": "view == sectionAllFiles",
+          "group": "group_0@1"
+        },
+        {
+          "command": "sectionAllFiles.copy",
+          "when": "view == sectionAllFiles && viewItem == file",
+          "group": "group_2@1"
+        },
+        {
+          "command": "sectionAllFiles.cut",
+          "when": "view == sectionAllFiles && viewItem == file",
+          "group": "group_2@2"
+        },
+        {
+          "command": "sectionAllFiles.paste",
+          "when": "view == sectionAllFiles",
+          "group": "group_2@3"
+        },
+        {
+          "command": "sectionAllFiles.copyPath",
+          "when": "view == sectionAllFiles",
+          "group": "group_3@1"
+        },
+        {
+          "command": "sectionAllFiles.rename",
+          "when": "view == sectionAllFiles",
+          "group": "group_4@0"
+        },
+        {
+          "command": "sectionAllFiles.delete",
+          "when": "view == sectionAllFiles",
+          "group": "group_4@1"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "scratchesTab",
+          "title": "Scratches",
+          "icon": "res/build.svg"
         }
       ]
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run package",
-    "compile": "webpack",
-    "watch": "webpack --watch",
-    "package": "webpack --mode production --devtool hidden-source-map",
-    "compile-tests": "tsc -p . --outDir out",
-    "watch-tests": "tsc -p . -w --outDir out",
-    "pretest": "npm run compile-tests && npm run compile && npm run lint",
-    "lint": "eslint src --ext ts",
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
     "test": "vscode-test"
   },
-  "dependencies": {
-    "language-map": "^1.5.0"
-  },
   "devDependencies": {
-    "@types/mocha": "^10.0.7",
-    "@types/node": "20.x",
     "@types/vscode": "^1.91.0",
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@typescript-eslint/eslint-plugin": "^8.17.0",
+    "@typescript-eslint/parser": "^8.17.0",
+    "eslint": "^9.16.0",
+    "typescript": "^5.7.2",
     "@vscode/test-cli": "^0.0.10",
-    "@vscode/test-electron": "^2.4.0",
-    "eslint": "^9.8.0",
-    "ts-loader": "^9.5.1",
-    "typescript": "^5.5.4",
-    "webpack": "^5.93.0",
-    "webpack-cli": "^5.1.4"
+    "@vscode/test-electron": "^2.4.1"
   }
 }
