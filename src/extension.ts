@@ -1,60 +1,64 @@
-import * as vscode from 'vscode';
-import { Scratches } from './scratches';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as vscode from 'vscode';
+import { Scratches } from './scratches';
 
-export function activate(context: vscode.ExtensionContext) {
-	Scratches.createView(context);
+const SCRATCHES_CONFIG = 'scratches';
+const PATH_KEY = 'path';
 
-	vscode.commands.registerCommand("scratches.setRootPath", () => setRootPath());
+export function activate(context: vscode.ExtensionContext): void {
+    Scratches.createView(context);
 
-	context.subscriptions.push(
-		vscode.workspace.onDidChangeConfiguration(event => {
-			if (event.affectsConfiguration('scratches.path')) {
-				handleConfigChange(context);
-			}
-		})
-	);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('scratches.setRootPath', () => setRootPath()),
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (event.affectsConfiguration(`${SCRATCHES_CONFIG}.${PATH_KEY}`)) {
+                handleConfigChange(context);
+            }
+        }),
+    );
 }
 
-function _setRootPath(rootPath: string | undefined): boolean {
-	const homeDir = os.homedir();
+function normalizePath(rootPath: string | undefined): string | undefined {
+    if (!rootPath) {
+        return undefined;
+    }
 
-	rootPath = rootPath?.replace("~", homeDir);
-	if (rootPath && fs.existsSync(rootPath)) {
-		const config = vscode.workspace.getConfiguration("scratches");
-		config.update("path", rootPath, vscode.ConfigurationTarget.Global, true);
-		return true;
-	} else {
-		vscode.window.showInformationMessage("The path to the location where the \"scratch\" files are stored is incorrect.");
-		return false;
-	}
+    return rootPath.replace('~', os.homedir());
 }
 
-async function setRootPath() {
-	const options = {
-		canSelectMany: false,
-		canSelectFiles: false,
-		canSelectFolders: true,
-		defaultUri: vscode.Uri.file(os.homedir()),
-	};
-	const folderUri = await vscode.window.showOpenDialog(options);
+function updateRootPath(rootPath: string | undefined): boolean {
+    const normalizedPath = normalizePath(rootPath);
+    if (!normalizedPath || !fs.existsSync(normalizedPath)) {
+        vscode.window.showInformationMessage('The path to the location where the "scratch" files are stored is incorrect.');
+        return false;
+    }
 
-	if (folderUri && folderUri.length > 0) {
-		const rootPath = folderUri[0].fsPath;
-		_setRootPath(rootPath);
-	}
+    const config = vscode.workspace.getConfiguration(SCRATCHES_CONFIG);
+    void config.update(PATH_KEY, normalizedPath, vscode.ConfigurationTarget.Global, true);
+    return true;
 }
 
-function handleConfigChange(context: vscode.ExtensionContext) {
-	const config = vscode.workspace.getConfiguration("scratches");
-	const path = config.get<string>('path');
+async function setRootPath(): Promise<void> {
+    const folderUri = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        canSelectFiles: false,
+        canSelectFolders: true,
+        defaultUri: vscode.Uri.file(os.homedir()),
+    });
 
-	if (path) {
-		if (_setRootPath(path)) {
-			Scratches.createView(context);
-		}
-	}
+    if (folderUri?.[0]) {
+        updateRootPath(folderUri[0].fsPath);
+    }
 }
 
-export function deactivate() { }
+function handleConfigChange(context: vscode.ExtensionContext): void {
+    const config = vscode.workspace.getConfiguration(SCRATCHES_CONFIG);
+    const configuredPath = config.get<string>(PATH_KEY);
+
+    if (updateRootPath(configuredPath)) {
+        Scratches.createView(context);
+    }
+}
+
+export function deactivate(): void {}

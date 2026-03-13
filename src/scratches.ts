@@ -1,571 +1,484 @@
-
-import * as path from "path";
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import * as directory from './directory';
-import * as fs from "fs";
-import * as fileExtension from "./file_extension";
+import { FileExtensionsManager } from './file_extension';
 
-let scratchesDirectory: string;
-let copiedFileUri: vscode.Uri | null;
-let actionWithFile: ActionFile | null = null;
+type ClipboardState = {
+    fileUri: vscode.Uri;
+    action: ActionFile;
+};
+
+const DATE_PREFIX_REGEX = /^\d{8}/;
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const SPECIAL_CHAR_REGEX = /^[^a-zA-Z0-9]/;
+const DIGIT_REGEX = /^\d/;
+
+let clipboardState: ClipboardState | null = null;
 
 export enum ActionFile {
     COPY = 0,
-    CUT = 1
+    CUT = 1,
 }
 
+interface SectionConfig {
+    viewId: string;
+    directoryPath: string;
+}
+
+interface FileItem {
+    uri: vscode.Uri;
+    type: vscode.FileType;
+}
 
 export class Scratches {
-    public static createView(context: vscode.ExtensionContext) {
-        scratchesDirectory = directory.getRootScratchesDirectory();
-        if (fs.existsSync(scratchesDirectory)) {
-            directory.ensureDirectoryExists(scratchesDirectory);
-
-            const fileExtenrionsManager: fileExtension.FileExtensionsManager = new fileExtension.FileExtensionsManager();
-
-            const projectDirectory = directory.getDirectoryProject();
-            if (projectDirectory !== null) {
-                DirectoryViewer.initDirectoryViewer(context, "sectionProjectFiles", projectDirectory, fileExtenrionsManager);
-            }
-
-            DirectoryViewer.initDirectoryViewer(context, "sectionSharedFiles", directory.getDirectoryShare(), fileExtenrionsManager);
-            DirectoryViewer.initDirectoryViewer(context, "sectionAllFiles", scratchesDirectory, fileExtenrionsManager);
-        }
-        else {
+    public static createView(context: vscode.ExtensionContext): void {
+        const scratchesDirectory = directory.getRootScratchesDirectory();
+        if (!fs.existsSync(scratchesDirectory)) {
             vscode.window.showErrorMessage(`Error configuration "Scratches: Path". Directory "${scratchesDirectory}" not found!`);
+            return;
+        }
+
+        const fileExtensionsManager = new FileExtensionsManager();
+
+        const sections: SectionConfig[] = [
+            { viewId: 'sectionSharedFiles', directoryPath: directory.getDirectoryShare() },
+            { viewId: 'sectionAllFiles', directoryPath: scratchesDirectory },
+        ];
+
+        const projectDirectory = directory.getDirectoryProject();
+        if (projectDirectory) {
+            sections.unshift({ viewId: 'sectionProjectFiles', directoryPath: projectDirectory });
+        }
+
+        for (const section of sections) {
+            DirectoryViewer.initDirectoryViewer(context, section, fileExtensionsManager);
         }
     }
 }
 
+export class DirectoryViewer implements vscode.TreeDataProvider<FileItem>, vscode.Disposable {
+    private static readonly COMMAND_SUFFIXES = [
+        'refresh',
+        'newScratchFile',
+        'newFolder',
+        'delete',
+        'openScratchFile',
+        'rename',
+        'copy',
+        'cut',
+        'paste',
+        'copyPath',
+        'clear',
+    ] as const;
 
-export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
-    public selectItem: FileItem | null = null;
-    private _onDidChangeTreeData: vscode.EventEmitter<FileItem | undefined | null | void> = new vscode.EventEmitter<FileItem | undefined | null | void>();
+    public selectedItem: FileItem | null = null;
+    private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<FileItem | undefined | null | void>();
+    private readonly disposables: vscode.Disposable[] = [];
 
-    get onDidChangeTreeData(): vscode.Event<FileItem | undefined | null | void> {
-        return this._onDidChangeTreeData.event;
-    }
+    public readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
-    /**
-     * Initializes the directory viewer and sets up commands.
-     * @param context - The extension context.
-     * @param viewId - The ID of the tree view.
-     * @param directoryPath - The root directory to display.
-     * @param fileExtensionsManager - Manager for handling file extensions.
-     */
     public static initDirectoryViewer(
         context: vscode.ExtensionContext,
-        viewId: string,
-        directoryPath: string,
-        fileExtenrionsManager: fileExtension.FileExtensionsManager,
-    ) {
-        directory.ensureDirectoryExists(directoryPath);
+        section: SectionConfig,
+        fileExtensionsManager: FileExtensionsManager,
+    ): void {
+        directory.ensureDirectoryExists(section.directoryPath);
 
-        const directoryViewer = new DirectoryViewer(context, directoryPath, viewId, fileExtenrionsManager);
-        vscode.window.createTreeView(viewId, { treeDataProvider: directoryViewer, showCollapseAll: true });
+        const viewer = new DirectoryViewer(context, section.directoryPath, section.viewId, fileExtensionsManager);
+        context.subscriptions.push(viewer);
 
-        vscode.commands.registerCommand(viewId + ".refresh", () => directoryViewer.refresh());
-        vscode.commands.registerCommand(viewId + ".newScratchFile", () => directoryViewer.newScratchFile());
-        vscode.commands.registerCommand(viewId + ".newFolder", (node: FileItem) => directoryViewer.newFolder(node));
-        vscode.commands.registerCommand(viewId + ".delete", (node: FileItem) => directoryViewer.delete(node));
-        vscode.commands.registerCommand(viewId + ".openScratchFile", (node: FileItem) => directoryViewer.open(node));
-        vscode.commands.registerCommand(viewId + ".rename", (node: FileItem) => directoryViewer.rename(node));
-        vscode.commands.registerCommand(viewId + ".copy", (node: FileItem) => directoryViewer.copy(node));
-        vscode.commands.registerCommand(viewId + ".cut", (node: FileItem) => directoryViewer.cut(node));
-        vscode.commands.registerCommand(viewId + ".paste", (node: FileItem) => directoryViewer.paste(node));
-        vscode.commands.registerCommand(viewId + ".copyPath", (node: FileItem) => directoryViewer.copyPath(node));
-        vscode.commands.registerCommand(viewId + ".clear", () => directoryViewer.clear());
+        const treeView = vscode.window.createTreeView(section.viewId, {
+            treeDataProvider: viewer,
+            showCollapseAll: true,
+        });
+
+        viewer.trackDisposable(treeView);
+        viewer.registerCommands();
     }
 
     constructor(
-        public readonly context: vscode.ExtensionContext,
-        public readonly rootPath: string,
-        public readonly viewId: string,
-        public readonly fileExtenrionsManager: fileExtension.FileExtensionsManager,
-    ) { }
+        private readonly context: vscode.ExtensionContext,
+        private readonly rootPath: string,
+        private readonly viewId: string,
+        private readonly fileExtensionsManager: FileExtensionsManager,
+    ) {}
 
-    /**
-     * Opens the specified file item in a new text document.
-     * 
-     * If the provided element is a file, it opens the file in the editor while preserving focus.
-     * 
-     * @param {FileItem} element - The file item to open.
-     */
-    open(element: FileItem) {
-        this.selectItem = element;
-
-        if (element.type === vscode.FileType.File) {
-            vscode.window.showTextDocument(element.uri, { "preserveFocus": true });
+    private registerCommands(): void {
+        for (const suffix of DirectoryViewer.COMMAND_SUFFIXES) {
+            const commandId = `${this.viewId}.${suffix}`;
+            const callback = this.getCommandHandler(suffix);
+            this.trackDisposable(vscode.commands.registerCommand(commandId, callback));
         }
     }
 
-    /**
-     * Clears files older than a specified date by moving them to a "trash" directory.
-     * 
-     * This asynchronous function prompts the user to input a date in the format "YYYY-MM-DD". 
-     * It scans the specified root directory for files that have a date prefix in the format 
-     * "YYYYMMDD". If the file's date is older than the user-specified date, the file 
-     * will be moved to a "trash" directory. The user is prompted for confirmation before 
-     * proceeding with the move. Informational messages are displayed to the user throughout 
-     * the process to indicate the outcome.
-     */
-    async clear() {
-        const proposed_date = new Date(Date.now());
-        proposed_date.setDate(proposed_date.getDate() - 30);
+    private getCommandHandler(suffix: (typeof DirectoryViewer.COMMAND_SUFFIXES)[number]): (...args: FileItem[]) => unknown {
+        switch (suffix) {
+            case 'refresh':
+                return () => this.refresh();
+            case 'newScratchFile':
+                return () => this.newScratchFile();
+            case 'newFolder':
+                return (node?: FileItem) => this.newFolder(node ?? null);
+            case 'delete':
+                return (node?: FileItem) => this.delete(node ?? null);
+            case 'openScratchFile':
+                return (node: FileItem) => this.open(node);
+            case 'rename':
+                return (node: FileItem) => this.rename(node);
+            case 'copy':
+                return (node?: FileItem) => this.copy(node ?? null);
+            case 'cut':
+                return (node?: FileItem) => this.cut(node ?? null);
+            case 'paste':
+                return (node?: FileItem) => this.paste(node ?? null);
+            case 'copyPath':
+                return (node: FileItem) => this.copyPath(node);
+            case 'clear':
+                return () => this.clear();
+            default:
+                return () => undefined;
+        }
+    }
+
+    open(element: FileItem): void {
+        this.selectedItem = element;
+
+        if (element.type === vscode.FileType.File) {
+            void vscode.window.showTextDocument(element.uri, { preserveFocus: true });
+        }
+    }
+
+    async clear(): Promise<void> {
+        const proposedDate = new Date(Date.now());
+        proposedDate.setDate(proposedDate.getDate() - 30);
 
         const userStringDate = await vscode.window.showInputBox({
-            prompt: "Specify a date. Files older than this will be moved to the 'trash' directory. Format: 'YYYY-MM-DD'.",
-            value: proposed_date.toISOString().split('T')[0],
+            prompt: 'Specify a date. Files older than this will be moved to the "trash" directory. Format: "YYYY-MM-DD".',
+            value: proposedDate.toISOString().split('T')[0],
         });
 
-        if (!userStringDate) { return; }
+        if (!userStringDate) {
+            return;
+        }
 
-        if (!userStringDate.match(/\d{4}-\d{2}-\d{2}/)) {
+        if (!ISO_DATE_REGEX.test(userStringDate)) {
             vscode.window.showInformationMessage(`Invalid date format: ${userStringDate}!`);
             return;
         }
 
         const userDate = new Date(userStringDate);
-        if (isNaN(userDate.getTime())) {
-            vscode.window.showInformationMessage(`Invalid date format: ${userStringDate}!`);
+        if (Number.isNaN(userDate.getTime())) {
+            vscode.window.showInformationMessage(`Invalid date: ${userStringDate}!`);
             return;
         }
 
-
-        const files = fs.readdirSync(this.rootPath);
-        const filesToMove = files.filter(fileName => {
-            if (!fileName) { return false; }
-
-            const filePath = path.join(this.rootPath, fileName);
-            const stat = fs.statSync(filePath);
-            if (!stat.isFile()) { return false; }
-
-            const dateMatch = fileName.match(/^(\d{4})(\d{2})(\d{2})-\d{6}/);
-            if (dateMatch) {
-                const fileDate = new Date(`${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`);
-                return fileDate <= userDate && stat.mtime <= userDate;
+        const rootFiles = fs.readdirSync(this.rootPath).filter((name) => {
+            const datePrefix = name.match(DATE_PREFIX_REGEX)?.[0];
+            if (!datePrefix) {
+                return false;
             }
-            return false;
+
+            const fileDate = new Date(`${datePrefix.slice(0, 4)}-${datePrefix.slice(4, 6)}-${datePrefix.slice(6, 8)}`);
+            return !Number.isNaN(fileDate.getTime()) && fileDate < userDate;
         });
 
-        if (filesToMove.length === 0) {
-            vscode.window.showInformationMessage(`Nothing to move to "trash"`);
+        if (rootFiles.length === 0) {
+            vscode.window.showInformationMessage(`No files older than ${userStringDate} found in ${this.rootPath}`);
             return;
         }
 
-        const confirm = await vscode.window.showWarningMessage(
-            `Move ${filesToMove.length} files to the "trash"?`,
-            "Yes",
-            "No"
+        const confirmed = await vscode.window.showWarningMessage(
+            `Move ${rootFiles.length} files to "trash"?`,
+            { modal: true },
+            'Yes',
         );
 
-        if (confirm === "Yes") {
-            const trashPath = path.join(this.rootPath, 'trash');
-            directory.ensureDirectoryExists(trashPath);
-            filesToMove.forEach(fileName => {
-                fs.renameSync(path.join(this.rootPath, fileName), path.join(trashPath, fileName));
-            });
-            vscode.window.showInformationMessage(`Successfully moved ${filesToMove.length} files to "trash"`);
-            this.refresh();
-        }
-    }
-
-    /**
-    * Copies or cuts the specified file item, or the currently selected item if none is provided.
-    * 
-    * This function checks if the selected element is valid and whether it is a file or a directory. 
-    * If the element is a directory, an informational message is displayed, as directories cannot be copied. 
-    * The URI of the copied or cut file is stored for later use.
-    * 
-    * @param {FileItem | null} element - The file item to copy or cut. If null, the currently selected item is used.
-    */
-    _copyCut(element: FileItem | null) {
-        if (!element) {
-            element = this.selectItem;
-        }
-
-        if (!element) {
-            vscode.window.showInformationMessage(`No file selected.`);
+        if (confirmed !== 'Yes') {
             return;
         }
 
-        if (element.type === vscode.FileType.Directory) {
-            vscode.window.showInformationMessage(`Copying directories is not supported.`);
+        const trashPath = path.join(this.rootPath, 'trash');
+        directory.ensureDirectoryExists(trashPath);
+
+        for (const fileName of rootFiles) {
+            fs.renameSync(path.join(this.rootPath, fileName), path.join(trashPath, fileName));
+        }
+
+        vscode.window.showInformationMessage(`Successfully moved ${rootFiles.length} files to "trash"`);
+        this.refresh();
+    }
+
+    private resolveSelectedElement(element: FileItem | null): FileItem | null {
+        return element ?? this.selectedItem;
+    }
+
+    private copyOrCut(element: FileItem | null, action: ActionFile): void {
+        const selected = this.resolveSelectedElement(element);
+        if (!selected) {
+            vscode.window.showInformationMessage('No file selected.');
             return;
         }
 
-        copiedFileUri = element.uri;
-    }
-
-    /**
-     * Copies the specified file item, or the currently selected item if none is provided.
-     * 
-     * This function calls the internal copy/cut function and sets the action to COPY.
-     * 
-     * @param {FileItem | null} element - The file item to copy. If null, the currently selected item is used.
-     */
-    copy(element: FileItem | null) {
-        this._copyCut(element);
-        actionWithFile = ActionFile.COPY;
-    }
-
-    /**
-     * Cuts the specified file item, or the currently selected item if none is provided.
-     * 
-     * This function calls the internal copy/cut function and sets the action to CUT.
-     * 
-     * @param {FileItem | null} element - The file item to cut. If null, the currently selected item is used.
-     */
-    cut(element: FileItem | null) {
-        this._copyCut(element);
-        actionWithFile = ActionFile.CUT;
-    }
-    /**
-     * Pastes the previously copied or cut file to the specified location.
-     * 
-     * If no element is specified, it uses the currently selected item.
-     * If the destination is a directory, the file will be pasted there; otherwise, it will be pasted 
-     * in the parent directory of the selected item. If a file with the same name already exists, 
-     * an informational message is displayed. The action can be either COPY or CUT.
-     * 
-     * @param {FileItem | null} element - The destination file item. If null, uses the currently selected item.
-     */
-    async paste(element: FileItem | null) {
-        if (!copiedFileUri) {
-            vscode.window.showInformationMessage(`Nothing was copied!`);
+        if (selected.type === vscode.FileType.Directory) {
+            vscode.window.showInformationMessage('Copying directories is not supported.');
             return;
         }
 
-        let newFilePath: string = this.rootPath;
+        clipboardState = {
+            fileUri: selected.uri,
+            action,
+        };
+    }
 
-        if (!element) {
-            element = this.selectItem;
+    copy(element: FileItem | null): void {
+        this.copyOrCut(element, ActionFile.COPY);
+    }
+
+    cut(element: FileItem | null): void {
+        this.copyOrCut(element, ActionFile.CUT);
+    }
+
+    async paste(element: FileItem | null): Promise<void> {
+        if (!clipboardState) {
+            vscode.window.showInformationMessage('Nothing was copied!');
+            return;
         }
 
-        if (element) {
-            if (element.type === vscode.FileType.Directory) {
-                newFilePath = element.uri.fsPath;
-            } else {
-                newFilePath = path.resolve(element.uri.fsPath, '..');
-            }
-        }
+        const destinationDirectory = this.resolveDestinationDirectory(this.resolveSelectedElement(element));
+        const fileName = path.basename(clipboardState.fileUri.fsPath);
+        const newFilePath = path.join(destinationDirectory, fileName);
 
-        newFilePath = path.resolve(newFilePath, `${copiedFileUri.path.split('/').pop()}`);
         if (fs.existsSync(newFilePath)) {
             vscode.window.showInformationMessage(`A file named "${newFilePath}" already exists!`);
             return;
         }
 
         try {
-            switch (actionWithFile) {
-                case ActionFile.COPY:
-                    fs.copyFileSync(copiedFileUri.fsPath, newFilePath);
-                    vscode.window.showInformationMessage(`File ${copiedFileUri.path.split('/').pop()} successfully pasted to ${newFilePath}`);
-                    break;
-                case ActionFile.CUT:
-                    fs.renameSync(copiedFileUri.fsPath, newFilePath);
-                    vscode.window.showInformationMessage(`File ${copiedFileUri.path.split('/').pop()} successfully moved to ${newFilePath}`);
-                    break;
-                default:
-                    vscode.window.showErrorMessage(`Error while pasting the file.`);
+            if (clipboardState.action === ActionFile.COPY) {
+                fs.copyFileSync(clipboardState.fileUri.fsPath, newFilePath);
+                vscode.window.showInformationMessage(`File ${fileName} successfully pasted to ${newFilePath}`);
+            } else {
+                fs.renameSync(clipboardState.fileUri.fsPath, newFilePath);
+                vscode.window.showInformationMessage(`File ${fileName} successfully moved to ${newFilePath}`);
             }
         } catch (error) {
-            vscode.window.showErrorMessage(`Error while pasting the file: ${error}`);
+            vscode.window.showErrorMessage(`Error while pasting the file: ${String(error)}`);
         }
 
-        copiedFileUri = null;
-        actionWithFile = null;
+        clipboardState = null;
         this.refresh();
     }
 
-    /**
-     * Copies the file path of the specified file item to the clipboard.
-     * 
-     * @param {FileItem} element - The file item whose path will be copied.
-     */
-    copyPath(element: FileItem) {
-        vscode.env.clipboard.writeText(element.uri.fsPath);
+    private resolveDestinationDirectory(element: FileItem | null): string {
+        if (!element) {
+            return this.rootPath;
+        }
+
+        if (element.type === vscode.FileType.Directory) {
+            return element.uri.fsPath;
+        }
+
+        return path.dirname(element.uri.fsPath);
     }
 
-    /**
-     * Refreshes the file tree to reflect any changes made.
-     */
+    copyPath(element: FileItem): void {
+        void vscode.env.clipboard.writeText(element.uri.fsPath);
+    }
+
     refresh(): void {
-        this._onDidChangeTreeData.fire(undefined);
+        this.onDidChangeTreeDataEmitter.fire(undefined);
     }
 
-    /**
-     * Creates a new scratch file with a timestamp-based name.
-     * 
-     * The function prompts the user to select a file extension and 
-     * generates a default file name based on the current date and time. 
-     * It then allows the user to edit the file name before creating 
-     * an empty file at the specified location. After the file is created, 
-     * it opens the document in the editor and refreshes the file list.
-     */
-    async newScratchFile() {
-        const selectedType = await this.fileExtenrionsManager.selectFileExtension();
-
-        if (selectedType) {
-            const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
-            const fileName = `${timestamp}${selectedType}`;
-
-            const fileNameNew = await vscode.window.showInputBox({
-                placeHolder: "Input file name",
-                value: fileName,
-                valueSelection: [0, timestamp.length],
-            });
-
-            if (fileNameNew) {
-                const filePath = path.join(this.rootPath, fileNameNew);
-                fs.writeFileSync(filePath, "");
-
-                vscode.workspace.openTextDocument(filePath).then((doc) => {
-                    vscode.window.showTextDocument(doc);
-                });
-
-                this.refresh();
-            }
+    async newScratchFile(): Promise<void> {
+        const selectedType = await this.fileExtensionsManager.selectFileExtension();
+        if (!selectedType) {
+            return;
         }
+
+        const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+        const fileName = `${timestamp}${selectedType}`;
+
+        const fileNameNew = await vscode.window.showInputBox({
+            placeHolder: 'Input file name',
+            value: fileName,
+            valueSelection: [0, timestamp.length],
+        });
+
+        if (!fileNameNew) {
+            return;
+        }
+
+        const filePath = path.join(this.rootPath, fileNameNew);
+        fs.writeFileSync(filePath, '');
+
+        const doc = await vscode.workspace.openTextDocument(filePath);
+        await vscode.window.showTextDocument(doc);
+        this.refresh();
     }
 
-    /**
-     * Creates a new folder in the specified location.
-     * 
-     * If an element is provided, it determines the folder path based 
-     * on the type of the element. If no element is provided, it defaults 
-     * to the currently selected item. The user is prompted to enter 
-     * a folder name, and if a folder with that name does not already 
-     * exist, it creates the folder. If the folder exists, an information 
-     * message is displayed to the user.
-     * 
-     * @param {FileItem | null} element - The file item representing the 
-     * location where the new folder should be created. If null, uses 
-     * the currently selected item.
-     */
-    async newFolder(element: FileItem | null) {
-        let newFilePath = this.rootPath;
-        if (!element) {
-            element = this.selectItem;
-        }
-
-        if (element) {
-            newFilePath = element.type === vscode.FileType.Directory ?
-                element.uri.fsPath :
-                path.resolve(element.uri.fsPath, '..');
-        }
-
+    async newFolder(element: FileItem | null): Promise<void> {
+        const basePath = this.resolveDestinationDirectory(this.resolveSelectedElement(element));
         const folderNameNew = await vscode.window.showInputBox({
-            placeHolder: "Input folder name",
-            value: "",
+            placeHolder: 'Input folder name',
+            value: '',
         });
 
-        if (folderNameNew) {
-            newFilePath = path.join(newFilePath, folderNameNew);
-            if (!fs.existsSync(newFilePath)) {
-                fs.mkdirSync(newFilePath, { recursive: true });
-                this.refresh();
-            } else {
-                vscode.window.showInformationMessage(`A folder named "${folderNameNew}" already exists`);
-            }
+        if (!folderNameNew) {
+            return;
         }
+
+        const newFolderPath = path.join(basePath, folderNameNew);
+        if (fs.existsSync(newFolderPath)) {
+            vscode.window.showInformationMessage(`A folder named "${folderNameNew}" already exists`);
+            return;
+        }
+
+        fs.mkdirSync(newFolderPath, { recursive: true });
+        this.refresh();
     }
 
-    /**
-     * Renames a file or folder based on user input.
-     * 
-     * This function prompts the user to enter a new name for the selected
-     * file or folder. If the new name is provided, it renames the file 
-     * or folder and displays a confirmation message. It also closes any 
-     * open editor tabs associated with the file being renamed.
-     * 
-     * @param {FileItem} element - The file item that represents the file 
-     * or folder to be renamed.
-     */
-    async rename(element: FileItem) {
-        const fileName = await vscode.window.showInputBox({
-            prompt: "Enter new file name",
-        });
+    async rename(element: FileItem): Promise<void> {
         const oldPath = element.uri.fsPath;
+        const fileName = await vscode.window.showInputBox({
+            prompt: 'Enter new file name',
+            value: path.basename(oldPath),
+        });
 
-        if (fileName) {
-            const newFilePath = path.join(path.dirname(oldPath), fileName);
-            fs.renameSync(oldPath, newFilePath);
-            vscode.window.showInformationMessage(`Renamed: ${oldPath} to ${newFilePath}`);
-            this.refresh();
-
-            const documents = vscode.workspace.textDocuments.filter(td => td.fileName === oldPath);
-
-            for (const doc of documents) {
-                await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
-                await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-            }
-
-            // TODO нужно научиться переименовывать и во вкладках наименование, пока просто закрываем,
-            // сделать чтобы работало так же как и в vscode при переименовании
+        if (!fileName) {
+            return;
         }
+
+        const newFilePath = path.join(path.dirname(oldPath), fileName);
+        fs.renameSync(oldPath, newFilePath);
+        vscode.window.showInformationMessage(`Renamed: ${oldPath} to ${newFilePath}`);
+        this.refresh();
+
+        await this.closeOpenDocument(oldPath);
     }
 
-    /**
-     * Deletes a file or folder after user confirmation.
-     * 
-     * This function checks if an element is provided. If not, it uses
-     * the currently selected item. It prompts the user for confirmation 
-     * before deleting the specified file or folder. If confirmed, the 
-     * function deletes the item and closes any open editor tabs associated 
-     * with it.
-     * 
-     * @param {FileItem | null} element - The file item to delete. If null, 
-     * it defaults to the currently selected item.
-     */
-    async delete(element: FileItem | null) {
-        if (!element) {
-            element = this.selectItem;
-        }
+    async delete(element: FileItem | null): Promise<void> {
+        const selected = this.resolveSelectedElement(element);
 
-        if (!element) {
-            vscode.window.showErrorMessage("No file selected!");
+        if (!selected) {
+            vscode.window.showErrorMessage('No file selected!');
             return;
         }
 
         const confirm = await vscode.window.showWarningMessage(
-            `Are you sure you want to delete ${element.uri.fsPath}?`,
-            "Yes",
-            "No"
+            `Are you sure you want to delete ${selected.uri.fsPath}?`,
+            'Yes',
+            'No',
         );
 
-        if (confirm === "Yes") {
-            if (element.type === vscode.FileType.Directory) {
-                fs.rmdirSync(element.uri.fsPath, { recursive: true });
-                vscode.window.showInformationMessage(`Deleted folder: ${element.uri.fsPath}`);
-            } else {
-                fs.unlinkSync(element.uri.fsPath);
-                vscode.window.showInformationMessage(`Deleted file: ${element.uri.fsPath}`);
+        if (confirm !== 'Yes') {
+            return;
+        }
 
-                const documents = vscode.workspace.textDocuments.filter(td => td.fileName === element.uri.fsPath);
+        if (selected.type === vscode.FileType.Directory) {
+            fs.rmSync(selected.uri.fsPath, { recursive: true, force: true });
+            vscode.window.showInformationMessage(`Deleted folder: ${selected.uri.fsPath}`);
+        } else {
+            fs.unlinkSync(selected.uri.fsPath);
+            vscode.window.showInformationMessage(`Deleted file: ${selected.uri.fsPath}`);
+            await this.closeOpenDocument(selected.uri.fsPath);
+        }
 
-                for (const doc of documents) {
-                    await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
-                    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-                }
-            }
+        this.selectedItem = null;
+        this.refresh();
+    }
 
-            this.selectItem = null;
-            this.refresh();
+    private async closeOpenDocument(filePath: string): Promise<void> {
+        const documents = vscode.workspace.textDocuments.filter((td) => td.fileName === filePath);
+
+        for (const doc of documents) {
+            await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+            await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
         }
     }
 
-    /**
-     * Retrieves the children of the specified directory or the root path.
-     * 
-     * This function reads the contents of the provided directory or the 
-     * root path if no element is specified. It returns a promise that 
-     * resolves to an array of `FileItem` objects representing the files 
-     * and directories within the specified path.
-     * 
-     * @param {FileItem} [element] - An optional `FileItem` representing 
-     * the directory whose children should be retrieved. If not provided, 
-     * the root path is used.
-     * @returns {Thenable<FileItem[]>} A promise that resolves to an array 
-     * of `FileItem` objects.
-     */
     getChildren(element?: FileItem): Thenable<FileItem[]> {
-        let dirPath = this.rootPath;
-        if (element) {
-            dirPath = element.uri.fsPath;
-        }
-
+        const dirPath = element?.uri.fsPath ?? this.rootPath;
         const files = fs.readdirSync(dirPath);
-        return Promise.resolve(
-            files.map((file) => {
-                const filePath = path.join(dirPath, file);
-                const stat = fs.statSync(filePath);
-                const type = stat.isFile() ? vscode.FileType.File
-                    : stat.isDirectory() ? vscode.FileType.Directory
-                        : stat.isSymbolicLink() ? vscode.FileType.SymbolicLink
+
+        const items = files
+            .map((fileName) => {
+                const filePath = path.join(dirPath, fileName);
+                const stat = fs.lstatSync(filePath);
+                const type = stat.isDirectory()
+                    ? vscode.FileType.Directory
+                    : stat.isFile()
+                        ? vscode.FileType.File
+                        : stat.isSymbolicLink()
+                            ? vscode.FileType.SymbolicLink
                             : vscode.FileType.Unknown;
 
-                return { uri: vscode.Uri.file(filePath), type: type, name: file };
-            }).sort(
-                (a, b) => {
-                    const specialCharsRegex = /^[^a-zA-Z0-9]/;
-                    const digitRegex = /^\d/;
+                return { uri: vscode.Uri.file(filePath), type };
+            })
+            .sort(compareFileItems);
 
-                    if (a.type !== b.type) {
-                        if (a.type < b.type) {
-                            return 1;
-                        }
-                        else {
-                            return -1;
-                        }
-                    }
-
-                    const aIsSpecialChar = specialCharsRegex.test(a.name);
-                    const bIsSpecialChar = specialCharsRegex.test(a.name);
-                    if (aIsSpecialChar && !bIsSpecialChar) {
-                        return -1;
-                    }
-                    if (!aIsSpecialChar && bIsSpecialChar) {
-                        return 1;
-                    }
-
-                    const aIsDigit = digitRegex.test(a.name);
-                    const bIsDigit = digitRegex.test(b.name);
-
-                    if (aIsDigit && !bIsDigit) {
-                        return 1;
-                    }
-                    if (!aIsDigit && bIsDigit) {
-                        return -1;
-                    }
-                    if (aIsDigit && bIsDigit) {
-                        return b.name.localeCompare(a.name);
-                    }
-
-                    return a.name.localeCompare(b.name);
-                }
-            )
-        );
+        return Promise.resolve(items);
     }
 
-    /**
-     * Creates a tree item representation of the specified file or directory.
-     * 
-     * This function generates a `TreeItem` for the provided `FileItem`. 
-     * If the item is a directory, it is marked as collapsible; otherwise, 
-     * it is not. The tree item includes a command for opening the file 
-     * in the editor.
-     * 
-     * @param {FileItem} element - The `FileItem` to create a tree item for.
-     * @returns {vscode.TreeItem} A `TreeItem` representing the specified file or directory.
-     */
     getTreeItem(element: FileItem): vscode.TreeItem {
         const treeItem = new vscode.TreeItem(
             element.uri,
-            element.type === vscode.FileType.Directory ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+            element.type === vscode.FileType.Directory
+                ? vscode.TreeItemCollapsibleState.Collapsed
+                : vscode.TreeItemCollapsibleState.None,
         );
+
         treeItem.command = {
             command: `${this.viewId}.openScratchFile`,
-            title: "Open File",
+            title: 'Open File',
             arguments: [element],
         };
         treeItem.contextValue = element.type === vscode.FileType.Directory ? 'directory' : 'file';
+
         return treeItem;
     }
 
-    /**
-     * Cleans up resources when the provider is disposed.
-     * 
-     * This function disposes of any resources associated with the tree data 
-     * event subscription to prevent memory leaks.
-     */
+    private trackDisposable(disposable: vscode.Disposable): void {
+        this.disposables.push(disposable);
+        this.context.subscriptions.push(disposable);
+    }
+
     dispose(): void {
-        this._onDidChangeTreeData.dispose();
+        this.onDidChangeTreeDataEmitter.dispose();
+
+        for (const disposable of this.disposables) {
+            disposable.dispose();
+        }
+
+        this.disposables.length = 0;
     }
 }
 
+export function compareFileItems(a: FileItem, b: FileItem): number {
+    if (a.type !== b.type) {
+        return a.type === vscode.FileType.Directory ? -1 : 1;
+    }
 
-interface FileItem {
-    uri: vscode.Uri;
-    type: vscode.FileType;
+    const aName = path.basename(a.uri.fsPath);
+    const bName = path.basename(b.uri.fsPath);
+
+    const aIsSpecial = SPECIAL_CHAR_REGEX.test(aName);
+    const bIsSpecial = SPECIAL_CHAR_REGEX.test(bName);
+
+    if (aIsSpecial !== bIsSpecial) {
+        return aIsSpecial ? -1 : 1;
+    }
+
+    const aIsDigit = DIGIT_REGEX.test(aName);
+    const bIsDigit = DIGIT_REGEX.test(bName);
+
+    if (aIsDigit !== bIsDigit) {
+        return aIsDigit ? 1 : -1;
+    }
+
+    if (aIsDigit && bIsDigit) {
+        return bName.localeCompare(aName);
+    }
+
+    return aName.localeCompare(bName);
 }
