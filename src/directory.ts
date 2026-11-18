@@ -2,6 +2,20 @@ import path from 'path';
 import * as vscode from 'vscode';
 import * as os from "os";
 import * as fs from "fs";
+import { createHash } from 'crypto';
+
+export function getProjectStoragePath(root: string, workspaceUri: vscode.Uri): string {
+    const projectName = (path.basename(workspaceUri.fsPath) || 'workspace').slice(0, 80);
+    const hash = createHash('sha256').update(workspaceUri.toString()).digest('hex');
+    return path.join(root, '.projects', `${projectName}-${hash}`);
+}
+
+export function ensureProjectStoragePath(root: string, workspaceUri: vscode.Uri): string {
+    ensureDirectoryExists(path.join(root, '.projects'));
+    const projectPath = getProjectStoragePath(root, workspaceUri);
+    ensureDirectoryExists(projectPath);
+    return projectPath;
+}
 
 /**
  * Retrieves the project directory based on the currently opened workspace.
@@ -15,12 +29,11 @@ import * as fs from "fs";
 export function getDirectoryProject(): string | null {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
-        vscode.window.showErrorMessage("No workspace folder opened.");
         return null;
     }
 
-    const projectName = path.basename(workspaceFolder.uri.fsPath);
-    return path.join(getRootScratchesDirectory(), projectName);
+    const root = getRootScratchesDirectory();
+    return ensureProjectStoragePath(root, workspaceFolder.uri);
 }
 /**
  * Retrieves the share directory path within the root scratches directory.
@@ -36,64 +49,24 @@ export function getDirectoryShare(): string {
 }
 
 /**
- * Gets the path to the VS Code directory within the root scratches directory.
- * @returns {string} The path to the VS Code directory.
- */
-export function getVsCodePath(): string {
-    return path.join(getRootScratchesDirectory(), '.vscode');
-}
-
-/**
- * Gets the path to the recent file extensions JSON file within the VS Code directory.
- * @returns {string} The path to the recent file extensions JSON file.
- */
-export function getFileExtensionsPath(): string {
-    return path.join(getVsCodePath(), '.recentFileExtension.json');
-}
-
-/**
- * Retrieves the list of recent file extensions from the JSON file.
- * If the file does not exist, it creates it with an empty array.
- * @returns {string[]} An array of recent file extensions.
- */
-export function getFileExtensions(): string[] {
-    ensureDirectoryExists(getVsCodePath());
-
-    const fileExtensionsPath = getFileExtensionsPath();
-    if (!fs.existsSync(fileExtensionsPath)) {
-        fs.writeFileSync(fileExtensionsPath, JSON.stringify([], null, 2));
-    }
-
-    const data = fs.readFileSync(fileExtensionsPath, 'utf8');
-    return JSON.parse(data);
-}
-
-
-
-
-/**
  * Retrieves the root directory to work with, based on configuration.
  * 
- * If the directory is not configured, the home directory is returned as 
- * a fallback. An error message is displayed if the configuration is 
- * missing.
+ * If the directory is not configured, an empty string is returned.
  *
  * @returns {string} The path to the root directory.
  */
 export function getRootScratchesDirectory(): string {
     const config = vscode.workspace.getConfiguration("scratches");
-    const homeDir = os.homedir();
-
-    let directory = config.get<string>("path") ?? '';
-
-    if (!directory) {
-        vscode.window.showErrorMessage("Scratches directory is not configured.");
-        return homeDir;
-    }
-
-    return directory.replace("~", homeDir);
+    return expandHomeDirectory(config.get<string>("path") ?? '');
 }
 
+export function expandHomeDirectory(directory: string): string {
+    if (directory === '~') { return os.homedir(); }
+    if (directory.startsWith('~/') || (path.sep === '\\' && directory.startsWith('~\\'))) {
+        return path.join(os.homedir(), directory.slice(2));
+    }
+    return directory;
+}
 
 /**
  * Ensures that the specified directory exists.
@@ -110,6 +83,9 @@ export function ensureDirectoryExists(directory: string) {
     try {
         if (!fs.existsSync(directory)) {
             fs.mkdirSync(directory, { recursive: true });
+        }
+        if (!fs.lstatSync(directory).isDirectory()) {
+            throw new Error(`Not a directory or is a symbolic link: ${directory}`);
         }
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error occurred';

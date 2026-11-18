@@ -2,11 +2,16 @@ import * as vscode from 'vscode';
 import { Scratches } from './scratches';
 import * as fs from 'fs';
 import * as os from 'os';
+import { expandHomeDirectory } from './directory';
 
 export function activate(context: vscode.ExtensionContext) {
-	Scratches.createView(context);
-
-	vscode.commands.registerCommand("scratches.setRootPath", () => setRootPath());
+	context.subscriptions.push(vscode.window.registerTreeDataProvider('viewsWelcome', {
+		getTreeItem: () => new vscode.TreeItem(''),
+		getChildren: () => [],
+	}));
+	context.subscriptions.push(vscode.commands.registerCommand("scratches.setRootPath", () => setRootPath()));
+	context.subscriptions.push(vscode.commands.registerCommand('scratches.swapCompareSides', () => Scratches.swapComparison()));
+	context.subscriptions.push(vscode.commands.registerCommand('scratches.compareWithClipboard', () => Scratches.compareActiveWithClipboard()));
 
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(event => {
@@ -15,18 +20,20 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 		})
 	);
+	context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => Scratches.createView(context)));
+	context.subscriptions.push({ dispose: () => Scratches.dispose() });
+	Scratches.createView(context);
 }
 
-function _setRootPath(rootPath: string | undefined): boolean {
-	const homeDir = os.homedir();
-
-	rootPath = rootPath?.replace("~", homeDir);
-	if (rootPath && fs.existsSync(rootPath)) {
+async function _setRootPath(rootPath: string | undefined): Promise<boolean> {
+	rootPath = rootPath === undefined ? undefined : expandHomeDirectory(rootPath);
+	try {
+		if (!rootPath || !fs.lstatSync(rootPath).isDirectory()) { throw new Error('Not a directory or is a symbolic link'); }
 		const config = vscode.workspace.getConfiguration("scratches");
-		config.update("path", rootPath, vscode.ConfigurationTarget.Global, true);
+		await config.update("path", rootPath, vscode.ConfigurationTarget.Global);
 		return true;
-	} else {
-		vscode.window.showInformationMessage("The path to the location where the \"scratch\" files are stored is incorrect.");
+	} catch (error) {
+		vscode.window.showErrorMessage(`Could not set scratch directory: ${error}`);
 		return false;
 	}
 }
@@ -42,19 +49,12 @@ async function setRootPath() {
 
 	if (folderUri && folderUri.length > 0) {
 		const rootPath = folderUri[0].fsPath;
-		_setRootPath(rootPath);
+		await _setRootPath(rootPath);
 	}
 }
 
 function handleConfigChange(context: vscode.ExtensionContext) {
-	const config = vscode.workspace.getConfiguration("scratches");
-	const path = config.get<string>('path');
-
-	if (path) {
-		if (_setRootPath(path)) {
-			Scratches.createView(context);
-		}
-	}
+	Scratches.createView(context);
 }
 
 export function deactivate() { }

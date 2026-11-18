@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Test on Linux
+        if: runner.os == 'Linux'
+        env:
+          SCRATCHES_TEST_CROSS_DEVICE_DIR: /dev/shm
+        run: xvfb-run -a npm test
+      - name: Test on macOS or Windows
+        if: runner.os != 'Linux'
+        run: npm test
