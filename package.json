@@ -2,7 +2,7 @@
   "name": "scratches",
   "displayName": "scratches",
   "description": "Scratches is a Visual Studio Code extension designed to help you manage temporary or experimental files during your coding sessions. It provides a centralized storage solution for scratch files, enabling you to efficiently organize and access these files. With features like project-specific file management, shared files access, and comprehensive file operations, Scratches enhances your workflow by keeping your scratch files organized and easily accessible.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "repository": { "type": "git", "url": "https://github.com/savvarost/scratches.git" },
   "publisher": "scratches",
   "engines": {
