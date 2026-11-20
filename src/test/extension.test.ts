@@ -149,6 +149,59 @@ suite('File operations', () => {
         } finally { controlledViewer.dispose(); }
     });
 
+    test('imports dropped local files and folders without overwriting conflicts', async function () {
+        if (process.platform !== 'darwin' || vscode.env.remoteName) { this.skip(); }
+        const external = fs.mkdtempSync(path.join(process.env.SCRATCHES_TEST_TMPDIR || os.tmpdir(), 'scratches-drop-'));
+        const file = path.join(external, 'file.txt');
+        const folder = path.join(external, 'folder');
+        fs.writeFileSync(file, 'external'); fs.mkdirSync(folder);
+        fs.writeFileSync(path.join(folder, 'child.txt'), 'child');
+        fs.writeFileSync(path.join(root, 'file.txt'), 'existing');
+        const warnings: string[] = [];
+        const target = new DirectoryViewer({} as vscode.ExtensionContext, root, 'sectionSharedFiles', {} as FileExtensionsManager,
+            testUI({ warn: message => { warnings.push(message); } }));
+        const token = new vscode.CancellationTokenSource();
+        try {
+            const transfer = new vscode.DataTransfer();
+            transfer.set('text/uri-list', new vscode.DataTransferItem([vscode.Uri.file(file), vscode.Uri.file(folder)].map(uri => uri.toString()).join('\r\n')));
+            await target.dragController().handleDrop?.(undefined, transfer, token.token);
+            assert.strictEqual(fs.readFileSync(path.join(root, 'file.txt'), 'utf8'), 'existing');
+            assert.strictEqual(fs.readFileSync(path.join(root, 'folder', 'child.txt'), 'utf8'), 'child');
+            assert.strictEqual(fs.readFileSync(file, 'utf8'), 'external');
+            assert.ok(warnings.some(message => message.includes('1 failed')));
+        } finally { token.dispose(); target.dispose(); fs.rmSync(external, { recursive: true, force: true }); }
+    });
+
+    test('drag moves selected items between scratch trees and skips conflicts', async () => {
+        const sourceRoot = path.join(root, 'source');
+        const destinationRoot = path.join(root, 'destination');
+        fs.mkdirSync(sourceRoot); fs.mkdirSync(destinationRoot);
+        const file = path.join(sourceRoot, 'file.txt');
+        const folder = path.join(sourceRoot, 'folder');
+        fs.writeFileSync(file, 'source'); fs.mkdirSync(folder);
+        fs.writeFileSync(path.join(folder, 'child.txt'), 'child');
+        fs.writeFileSync(path.join(destinationRoot, 'file.txt'), 'existing');
+        const warnings: string[] = [];
+        const source = new DirectoryViewer({} as vscode.ExtensionContext, sourceRoot, 'sectionProjectFiles', {} as FileExtensionsManager,
+            testUI({ warn: message => { warnings.push(message); } }));
+        const destination = new DirectoryViewer({} as vscode.ExtensionContext, destinationRoot, 'sectionSharedFiles', {} as FileExtensionsManager,
+            testUI({ warn: message => { warnings.push(message); } }));
+        const token = new vscode.CancellationTokenSource();
+        try {
+            const transfer = new vscode.DataTransfer();
+            transfer.set('application/vnd.code.tree.sectionprojectfiles', new vscode.DataTransferItem(''));
+            await source.dragController().handleDrag?.([
+                { uri: vscode.Uri.file(file), type: vscode.FileType.File },
+                { uri: vscode.Uri.file(folder), type: vscode.FileType.Directory },
+            ], transfer, token.token);
+            await destination.dragController().handleDrop?.(undefined, transfer, token.token);
+            assert.strictEqual(fs.readFileSync(file, 'utf8'), 'source');
+            assert.strictEqual(fs.readFileSync(path.join(destinationRoot, 'file.txt'), 'utf8'), 'existing');
+            assert.strictEqual(fs.readFileSync(path.join(destinationRoot, 'folder', 'child.txt'), 'utf8'), 'child');
+            assert.ok(warnings.some(message => message.includes('1 failed')));
+        } finally { token.dispose(); source.dispose(); destination.dispose(); }
+    });
+
     test('marks cleanup candidates until confirmation is cancelled', async () => {
         const old = vscode.Uri.file(path.join(root, '20200101-000000.txt'));
         const recent = vscode.Uri.file(path.join(root, '20210101-000000.txt'));
@@ -1936,6 +1989,20 @@ suite('Extension lifecycle', () => {
             assert.strictEqual(views.get('sectionProjectFiles')?.rootPath, '');
             await vscode.commands.executeCommand('sectionProjectFiles.newScratchFile');
             assert.deepStrictEqual(fs.readdirSync(root), ['share']);
+            const saved = ensureProjectStoragePath(root, vscode.Uri.file(path.join(root, 'closed-project')));
+            fs.writeFileSync(path.join(saved, 'old.txt'), 'old');
+            const state = new Map<string, unknown>();
+            const context = { workspaceState: {
+                get: (key: string) => state.get(key),
+                update: async (key: string, value: unknown) => { state.set(key, value); },
+            } } as unknown as vscode.ExtensionContext;
+            await Scratches.selectWorkspaceFolder(context, async choices => {
+                const choice = choices.find(item => item.kind === 'saved' && item.name === path.basename(saved));
+                assert.ok(choice);
+                return choice;
+            });
+            assert.strictEqual(views.get('sectionProjectFiles')?.rootPath, saved);
+            assert.strictEqual(fs.readFileSync(path.join(saved, 'old.txt'), 'utf8'), 'old');
         } finally {
             await config.update('path', undefined, vscode.ConfigurationTarget.Global);
             fs.rmSync(root, { recursive: true, force: true });

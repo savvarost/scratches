@@ -26,8 +26,7 @@ export function ensureProjectStoragePath(root: string, workspaceUri: vscode.Uri)
  * @returns {string | null} The path to the project directory, or null if 
  *                          no workspace folder is opened.
  */
-export function getDirectoryProject(): string | null {
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+export function getDirectoryProject(workspaceFolder = vscode.workspace.workspaceFolders?.[0]): string | null {
     if (!workspaceFolder) {
         return null;
     }

@@ -21,6 +21,9 @@ let nativeFailureIdentity: FileIdentity | undefined;
 let nativeOperation: Promise<void> = Promise.resolve();
 let copiedBatch: { entries: Array<{ uri: vscode.Uri; identity: FileIdentity; type: vscode.FileType }>; root: string;
     rootIdentity: RootIdentity | undefined; isActive: () => boolean; action: ActionFile; token: FileIdentity } | undefined;
+const scratchTreeIds = ['sectionProjectFiles', 'sectionSharedFiles', 'sectionAllFiles'];
+const treeMime = (id: string) => `application/vnd.code.tree.${id.toLowerCase()}`;
+let activeDrag: { sourceView: string; batch: NonNullable<typeof copiedBatch> } | undefined;
 
 export interface FileClipboard {
     read(): Promise<{ paths: string[]; changeCount: number }>;
@@ -63,6 +66,7 @@ export async function renameInEditor(source: vscode.Uri, destination: vscode.Uri
 
 type FileIdentity = Pick<fs.Stats, 'dev' | 'ino'>;
 type RootIdentity = FileIdentity;
+type ProjectChoice = { kind: 'workspace'; folder: vscode.WorkspaceFolder } | { kind: 'saved'; name: string };
 type CompareItem = { uri: vscode.Uri; root: string; rootIdentity: RootIdentity | undefined;
     identity: FileIdentity; isActive: () => boolean };
 let selectedCompare: CompareItem | undefined;
@@ -285,12 +289,15 @@ export class Scratches {
     private static extensionsManager: fileExtension.FileExtensionsManager | undefined;
     private static viewers = new Map<string, DirectoryViewer>();
     private static rootWatcher: RootWatcher | undefined;
+    private static projectTree: vscode.TreeView<FileItem> | undefined;
 
     public static dispose() {
         this.rootWatcher?.dispose();
         this.rootWatcher = undefined;
         for (const disposable of this.disposables.splice(0)) { disposable.dispose(); }
         this.viewers.clear();
+        activeDrag = undefined;
+        this.projectTree = undefined;
         setCompareSource(undefined);
         lastComparison = undefined;
         copiedFileUri = null;
@@ -332,7 +339,23 @@ export class Scratches {
 
             const fileExtenrionsManager = this.extensionsManager ??= new fileExtension.FileExtensionsManager(context.globalState);
 
-            const projectDirectory = directory.getDirectoryProject() ?? '';
+            const folders = vscode.workspace.workspaceFolders ?? [];
+            const savedProject = context.workspaceState.get<{ root: string; name: string }>('scratches.selectedSavedProject');
+            const selectedUri = context.workspaceState.get<string>('scratches.selectedWorkspaceFolder');
+            const selectedFolder = folders.find(folder => folder.uri.toString() === selectedUri) ?? folders[0];
+            let projectDirectory = '';
+            let projectLabel = selectedFolder?.name;
+            if (savedProject?.root === scratchesDirectory && validName(savedProject.name) && /^[\s\S]+-[a-f0-9]{64}$/.test(savedProject.name)) {
+                const candidate = path.join(scratchesDirectory, '.projects', savedProject.name);
+                try {
+                    assertInsideRoot(scratchesDirectory, candidate, getRootIdentity(scratchesDirectory));
+                    if (fs.lstatSync(candidate).isDirectory()) {
+                        projectDirectory = candidate;
+                        projectLabel = savedProject.name.replace(/-([a-f0-9]{8})[a-f0-9]{56}$/, ' ($1)');
+                    }
+                } catch { /* Недоступный сохранённый проект заменяется открытой папкой. */ }
+            }
+            if (!projectDirectory) { projectDirectory = directory.getDirectoryProject(selectedFolder) ?? ''; }
             const roots: [string, string][] = [
                 ['sectionProjectFiles', projectDirectory],
                 ['sectionSharedFiles', directory.getDirectoryShare()],
@@ -342,11 +365,13 @@ export class Scratches {
                 const existing = this.viewers.get(viewId);
                 if (existing) { existing.setRootPath(rootPath); }
                 else {
-                    const { viewer, disposables } = DirectoryViewer.initDirectoryViewer(context, viewId, rootPath, fileExtenrionsManager);
+                    const { viewer, disposables, treeView } = DirectoryViewer.initDirectoryViewer(context, viewId, rootPath, fileExtenrionsManager);
                     this.viewers.set(viewId, viewer);
+                    if (viewId === 'sectionProjectFiles') { this.projectTree = treeView; }
                     this.disposables.push(...disposables);
                 }
             }
+            if (this.projectTree) { this.projectTree.description = projectLabel; }
             try {
                 this.rootWatcher ??= new RootWatcher(() => {
                     invalidateStaleCompareSource();
@@ -380,6 +405,52 @@ export class Scratches {
         if (!pair) { vscode.window.showErrorMessage('No scratch comparison to swap.'); return; }
         try { await openComparison(pair.right, pair.left); }
         catch (error) { vscode.window.showErrorMessage(`Could not compare files: ${error}`); }
+    }
+
+    public static async selectWorkspaceFolder(context: vscode.ExtensionContext,
+        pick: (choices: readonly ProjectChoice[]) => Promise<ProjectChoice | undefined> = async choices =>
+            (await vscode.window.showQuickPick(choices.map(choice => choice.kind === 'workspace' ? {
+                label: choice.folder.name, description: `Workspace: ${choice.folder.uri.toString(true)}`, choice,
+            } : {
+                label: choice.name.replace(/-([a-f0-9]{8})[a-f0-9]{56}$/, ' ($1)'), description: 'Saved scratch project', choice,
+            }), { placeHolder: 'Select an open workspace folder or saved scratch project' }))?.choice): Promise<void> {
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        try {
+            const root = directory.getRootScratchesDirectory();
+            if (!root) { throw new Error('Select a scratch directory first'); }
+            const identity = getRootIdentity(root);
+            assertInsideRoot(root, root, identity);
+            const projectsPath = path.join(root, '.projects');
+            let entries: fs.Dirent[] = [];
+            try {
+                assertInsideRoot(root, projectsPath, identity);
+                entries = await fs.promises.readdir(projectsPath, { withFileTypes: true });
+            } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { throw error; } }
+            const choices: ProjectChoice[] = [
+                ...folders.map(folder => ({ kind: 'workspace' as const, folder })),
+                ...entries.filter(entry => entry.isDirectory() && /^[\s\S]+-[a-f0-9]{64}$/.test(entry.name))
+                    .map(entry => ({ kind: 'saved' as const, name: entry.name })),
+            ];
+            if (!choices.length) { vscode.window.showInformationMessage('No workspace folders or saved scratch projects found.'); return; }
+            const selected = await pick(choices);
+            if (!selected) { return; }
+            if (root !== directory.getRootScratchesDirectory()) { throw new Error('Scratch directory changed'); }
+            assertInsideRoot(root, root, identity);
+            if (selected.kind === 'workspace') {
+                const folder = vscode.workspace.workspaceFolders?.find(item => item.uri.toString() === selected.folder.uri.toString());
+                if (!folder) { throw new Error('Workspace folder is no longer available'); }
+                directory.ensureProjectStoragePath(root, folder.uri);
+                await context.workspaceState.update('scratches.selectedWorkspaceFolder', folder.uri.toString());
+                await context.workspaceState.update('scratches.selectedSavedProject', undefined);
+            } else {
+                if (!choices.some(choice => choice.kind === 'saved' && choice.name === selected.name)) { throw new Error('Unknown scratch project'); }
+                const candidate = path.join(projectsPath, selected.name);
+                assertInsideRoot(root, candidate, identity);
+                if (!fs.lstatSync(candidate).isDirectory()) { throw new Error('Scratch project is no longer available'); }
+                await context.workspaceState.update('scratches.selectedSavedProject', { root, name: selected.name });
+            }
+            this.createView(context);
+        } catch (error) { vscode.window.showErrorMessage(`Could not select project: ${error}`); }
     }
 
     public static async compareActiveWithClipboard(): Promise<void> {
@@ -423,7 +494,8 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
 
         const directoryViewer = new DirectoryViewer(context, directoryPath, viewId, fileExtenrionsManager, defaultUI, systemFileClipboard);
         directoryViewer.updateSelection([]);
-        const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: directoryViewer, showCollapseAll: true, canSelectMany: true });
+        const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: directoryViewer, showCollapseAll: true, canSelectMany: true,
+            dragAndDropController: directoryViewer.dragController() });
         const disposables: vscode.Disposable[] = [treeView, directoryViewer,
             treeView.onDidChangeSelection(event => { directoryViewer.updateSelection(event.selection); })];
 
@@ -443,7 +515,7 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
         disposables.push(vscode.commands.registerCommand(viewId + ".compareWithSelected", (node: FileItem) => directoryViewer.compareWithSelected(node)));
         disposables.push(vscode.commands.registerCommand(viewId + ".compareSelected", (node: FileItem, selected?: FileItem[]) => directoryViewer.compareSelected(node, selected)));
         disposables.push(vscode.commands.registerCommand(viewId + ".compareWithClipboard", (node: FileItem) => directoryViewer.compareWithClipboard(node)));
-        return { viewer: directoryViewer, disposables };
+        return { viewer: directoryViewer, disposables, treeView };
     }
 
     constructor(
@@ -790,27 +862,31 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
         }
     }
 
-    private selectBatch(items: readonly FileItem[], action: ActionFile): Promise<void> | void {
-        if (items.length > 100) { this.ui.error('Select no more than 100 items'); return; }
+    private makeBatch(items: readonly FileItem[], action: ActionFile): NonNullable<typeof copiedBatch> {
+        if (!items.length || items.length > 100) { throw new Error('Select between 1 and 100 items'); }
         const all = [...new Map(items.map(item => [item.uri.fsPath, item])).values()];
         const unique = all.filter(item => !all.some(parent => {
             if (parent === item || parent.type !== vscode.FileType.Directory) { return false; }
             const relative = path.relative(parent.uri.fsPath, item.uri.fsPath);
             return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
         }));
-        let entries: Array<{ uri: vscode.Uri; identity: FileIdentity; type: vscode.FileType }>;
-        try {
-            entries = unique.map(item => {
-                const identity = selectedItemIdentity(this.rootPath, item, this.rootIdentity);
-                return { uri: item.uri, identity, type: item.type };
-            });
-        } catch (error) { this.ui.error(`Could not select items: ${error}`); return; }
+        const entries = unique.map(item => {
+            const identity = selectedItemIdentity(this.rootPath, item, this.rootIdentity);
+            return { uri: item.uri, identity, type: item.type };
+        });
         const sourceRoot = this.rootPath;
         const sourceRootIdentity = this.rootIdentity;
         const sourceRootVersion = this.rootVersion;
         const token = entries[0].identity;
-        const batch = { entries, root: sourceRoot, rootIdentity: sourceRootIdentity,
+        return { entries, root: sourceRoot, rootIdentity: sourceRootIdentity,
             isActive: () => this.rootVersion === sourceRootVersion, action, token };
+    }
+
+    private selectBatch(items: readonly FileItem[], action: ActionFile): Promise<void> | void {
+        let batch: NonNullable<typeof copiedBatch>;
+        try { batch = this.makeBatch(items, action); }
+        catch (error) { this.ui.error(`Could not select items: ${error}`); return; }
+        const { entries, root: sourceRoot, rootIdentity: sourceRootIdentity, token } = batch;
         copiedBatch = batch;
         copiedFileUri = entries[0].uri;
         copiedFileRoot = sourceRoot;
@@ -839,6 +915,50 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
             });
             return nativeOperation;
         }
+    }
+
+    public dragController(): vscode.TreeDragAndDropController<FileItem> {
+        return {
+            dragMimeTypes: [],
+            dropMimeTypes: [...scratchTreeIds.map(treeMime), 'files', 'text/uri-list'],
+            handleDrag: (items, _transfer, token) => {
+                activeDrag = undefined;
+                if (token.isCancellationRequested) { return; }
+                try { activeDrag = { sourceView: this.viewId, batch: this.makeBatch(items, ActionFile.CUT) }; }
+                catch (error) { this.ui.error(`Could not drag items: ${error}`); }
+            },
+            handleDrop: async (target, transfer, token) => {
+                const drag = activeDrag;
+                activeDrag = undefined;
+                if (token.isCancellationRequested) { return; }
+                if (drag && transfer.get(treeMime(drag.sourceView))) {
+                    await this.pasteBatch(drag.batch, target ?? null, this.rootVersion, true, token);
+                    return;
+                }
+                if (process.platform !== 'darwin' || vscode.env.uiKind !== vscode.UIKind.Desktop || vscode.env.remoteName) {
+                    this.ui.error('External file drops are supported only in local desktop VS Code on macOS.'); return;
+                }
+                const version = this.rootVersion;
+                try {
+                    const paths = new Set<string>();
+                    for (const [, item] of transfer) {
+                        const uri = item.asFile()?.uri;
+                        if (uri?.scheme === 'file' && !uri.authority) { paths.add(uri.fsPath); }
+                    }
+                    const uriList = transfer.get('text/uri-list');
+                    if (uriList) {
+                        for (const line of (await uriList.asString()).split(/\r?\n/)) {
+                            if (!line || line.startsWith('#')) { continue; }
+                            const uri = vscode.Uri.parse(line, true);
+                            if (uri.scheme !== 'file' || uri.authority) { throw new Error('Only local file URIs are supported'); }
+                            paths.add(uri.fsPath);
+                        }
+                    }
+                    if (token.isCancellationRequested) { return; }
+                    await this.pasteSystemFiles([...paths], target ?? null, version, true, token);
+                } catch (error) { this.ui.error(`Could not import dropped items: ${error}`); }
+            },
+        };
     }
     /**
      * Pastes the previously copied or cut file to the specified location.
@@ -968,10 +1088,11 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
         Scratches.refreshViews(this);
     }
 
-    private async pasteBatch(batch: NonNullable<typeof copiedBatch>, element: FileItem | null, rootVersion: number): Promise<void> {
+    private async pasteBatch(batch: NonNullable<typeof copiedBatch>, element: FileItem | null, rootVersion: number,
+        drop = false, cancellation?: vscode.CancellationToken): Promise<void> {
         const root = this.rootPath;
         const rootIdentity = this.rootIdentity;
-        const target = element ?? this.selectItem;
+        const target = drop ? element : element ?? this.selectItem;
         const folder = target ? (target.type === vscode.FileType.Directory ? target.uri.fsPath : path.dirname(target.uri.fsPath)) : root;
         const failed: typeof batch.entries = [];
         const errors: string[] = [];
@@ -979,6 +1100,7 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
         for (const entry of batch.entries) {
             try {
                 const validate = () => {
+                    if (cancellation?.isCancellationRequested) { throw new Error('Move cancelled'); }
                     if (rootVersion !== this.rootVersion || !batch.isActive()) { throw new Error('Scratch directory changed'); }
                     assertInsideRoot(batch.root, entry.uri.fsPath, batch.rootIdentity);
                     assertInsideRoot(root, folder, rootIdentity);
@@ -1065,17 +1187,19 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
         if (!current.isDirectory() || !sameFile(original, current)) { throw new Error('Source folder changed during copying'); }
     }
 
-    private async pasteSystemFiles(paths: string[], element: FileItem | null, rootVersion: number): Promise<void> {
-        if (!paths.length) { this.ui.error('The system clipboard does not contain files.'); return; }
-        if (paths.length > 100) { this.ui.error('Too many files in the system clipboard (maximum 100).'); return; }
+    private async pasteSystemFiles(paths: string[], element: FileItem | null, rootVersion: number,
+        drop = false, cancellation?: vscode.CancellationToken): Promise<void> {
+        if (!paths.length) { this.ui.error(drop ? 'The drop does not contain supported local files.' : 'The system clipboard does not contain files.'); return; }
+        if (paths.length > 100) { this.ui.error('Too many files (maximum 100).'); return; }
         const root = this.rootPath;
         const identity = this.rootIdentity;
-        const target = element ?? this.selectItem;
+        const target = drop ? element : element ?? this.selectItem;
         const folder = target ? (target.type === vscode.FileType.Directory ? target.uri.fsPath : path.dirname(target.uri.fsPath)) : root;
         const failures: string[] = [];
         let copied = 0;
         for (const source of paths) {
             try {
+                if (cancellation?.isCancellationRequested) { throw new Error('Import cancelled'); }
                 if (rootVersion !== this.rootVersion) { throw new Error('Scratch directory changed'); }
                 if (!path.isAbsolute(source) || source.includes('\0')) { throw new Error('Invalid source path'); }
                 assertInsideRoot(root, folder, identity);
@@ -1083,6 +1207,7 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
                 if (hasDirtyDocument(sourceUri)) { throw new Error('Save unsaved documents before copying'); }
                 const original = await fs.promises.lstat(source);
                 if (!original.isFile() && !original.isDirectory()) { throw new Error('Only regular files and folders are supported'); }
+                if (cancellation?.isCancellationRequested) { throw new Error('Import cancelled'); }
                 if (rootVersion !== this.rootVersion) { throw new Error('Scratch directory changed'); }
                 assertInsideRoot(root, folder, identity);
                 if (hasDirtyDocument(sourceUri)) { throw new Error('Save unsaved documents before copying'); }
@@ -1093,6 +1218,7 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
                         throw new Error('Cannot copy a folder into itself');
                     }
                     const validate = () => {
+                        if (cancellation?.isCancellationRequested) { throw new Error('Import cancelled'); }
                         if (rootVersion !== this.rootVersion) { throw new Error('Scratch directory changed'); }
                         assertInsideRoot(source, source, original);
                         assertInsideRoot(root, folder, identity);
@@ -1119,7 +1245,7 @@ export class DirectoryViewer implements vscode.TreeDataProvider<FileItem> {
         }
         Scratches.refreshViews(this);
         if (failures.length) { this.ui.warn(`Copied ${copied} files; ${failures.length} failed. Check destinations before retrying: ${failures.join('; ')}`); }
-        else { vscode.window.showInformationMessage(`Copied ${copied} files from the system clipboard.`); }
+        else { vscode.window.showInformationMessage(`Copied ${copied} items${drop ? ' from drop' : ' from the system clipboard'}.`); }
     }
 
     /**

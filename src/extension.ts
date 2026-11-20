@@ -12,6 +12,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand("scratches.setRootPath", () => setRootPath()));
 	context.subscriptions.push(vscode.commands.registerCommand('scratches.swapCompareSides', () => Scratches.swapComparison()));
 	context.subscriptions.push(vscode.commands.registerCommand('scratches.compareWithClipboard', () => Scratches.compareActiveWithClipboard()));
+	context.subscriptions.push(vscode.commands.registerCommand('scratches.selectWorkspaceFolder', () => Scratches.selectWorkspaceFolder(context)));
 
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(event => {

@@ -44,6 +44,34 @@ suite('Workspace lifecycle', () => {
             await changed;
             assert.strictEqual(project.rootPath, secondProject);
             assert.strictEqual(views.get('sectionProjectFiles'), project);
+            const state = new Map<string, unknown>();
+            const context = { workspaceState: {
+                get: (key: string) => state.get(key),
+                update: async (key: string, value: unknown) => { state.set(key, value); },
+            } } as unknown as vscode.ExtensionContext;
+            const folders = vscode.workspace.workspaceFolders;
+            assert.ok(folders && folders.length === 2);
+            await Scratches.selectWorkspaceFolder(context, async () => ({ kind: 'workspace', folder: folders[1] }));
+            const extraProject = getProjectStoragePath(second, folders[1].uri);
+            assert.strictEqual(project.rootPath, extraProject);
+            fs.writeFileSync(path.join(extraProject, 'second.txt'), 'second');
+            Scratches.createView(context);
+            assert.strictEqual(project.rootPath, extraProject);
+            await Scratches.selectWorkspaceFolder(context, async choices => {
+                const saved = choices.find(choice => choice.kind === 'saved' && choice.name === path.basename(secondProject));
+                assert.ok(saved);
+                return saved;
+            });
+            assert.strictEqual(project.rootPath, secondProject);
+            Scratches.createView(context);
+            assert.strictEqual(project.rootPath, secondProject);
+            await Scratches.selectWorkspaceFolder(context, async () => ({ kind: 'workspace', folder: folders[1] }));
+            await Scratches.selectWorkspaceFolder(context, async () => undefined);
+            assert.strictEqual(project.rootPath, extraProject);
+            state.set('scratches.selectedWorkspaceFolder', 'missing');
+            Scratches.createView(context);
+            assert.strictEqual(project.rootPath, secondProject);
+            assert.strictEqual(fs.readFileSync(path.join(extraProject, 'second.txt'), 'utf8'), 'second');
         } finally {
             if ((vscode.workspace.workspaceFolders?.length ?? 0) > 1) {
                 vscode.workspace.updateWorkspaceFolders(1, 1);

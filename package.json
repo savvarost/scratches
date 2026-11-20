@@ -35,6 +35,7 @@
         "command": "scratches.setRootPath",
         "title": "Scratches: Set Root Path..."
       },
+      { "command": "scratches.selectWorkspaceFolder", "title": "Scratches: Select Project", "icon": "$(folder-opened)" },
       { "command": "scratches.compareWithClipboard", "title": "Scratches: Compare Active File with Clipboard" },
       { "command": "scratches.swapCompareSides", "title": "Scratches: Swap Compared Files" },
       { "command": "sectionProjectFiles.compareWithClipboard", "title": "Compare with Clipboard" },
@@ -291,7 +292,7 @@
         {
           "id": "sectionProjectFiles",
           "name": "Project Files",
-          "when": "config.scratches.path && workspaceFolderCount > 0"
+          "when": "config.scratches.path"
         },
         {
           "id": "sectionSharedFiles",
@@ -321,10 +322,11 @@
         { "command": "sectionAllFiles.compareSelected", "when": "false" },
         {
           "command": "sectionProjectFiles.newScratchFile",
-          "when": "config.scratches.path && workspaceFolderCount > 0"
+          "when": "config.scratches.path"
         }
       ],
       "view/title": [
+        { "command": "scratches.selectWorkspaceFolder", "when": "view == sectionProjectFiles", "group": "navigation@5" },
         { "command": "sectionProjectFiles.searchContent", "when": "view == sectionProjectFiles", "group": "navigation@4" },
         { "command": "sectionSharedFiles.searchContent", "when": "view == sectionSharedFiles", "group": "navigation@4" },
         { "command": "sectionAllFiles.searchContent", "when": "view == sectionAllFiles", "group": "navigation@4" },
